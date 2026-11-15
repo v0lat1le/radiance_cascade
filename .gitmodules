@@ -1,0 +1,6 @@
+[submodule "external/RGFW"]
+	path = external/RGFW
+	url = https://github.com/ColleagueRiley/RGFW.git
+[submodule "external/NoGraphicsAPI"]
+	path = external/NoGraphicsAPI
+	url = https://github.com/sebbbi/NoGraphicsAPI.git
