@@ -29,20 +29,17 @@ VertexOutput vertexMain(uint vertex_index: SV_VertexID) {
 [shader("fragment")]
 float4 fragmentMain(VertexOutput input): SV_Target0 {
     Texture2D<float4> geometry = gpu_texture<Texture2D<float4>>(0);
-    Texture2D<float4> cascade0 = gpu_texture<Texture2D<float4>>(1);
+    Texture3D<float4> cascade0 = gpu_texture<Texture3D<float4>>(1);
     SamplerState nearest = gpu_sampler(0);
     SamplerState blinear = gpu_sampler(1);
-
-    //Texture2D<float4> cascade1 = gpu_texture<Texture2D<float4>>(2);
-    //return cascade1.Sample(blinear, float2(input.uv.x/4.0, input.uv.y));
 
     float4 sample_value = geometry.Sample(nearest, input.uv);
     int ray_count = 16;
     float ray_count_inv = 1.0 / float(ray_count);
-    float uv_x = input.uv.x * ray_count_inv;
+    float uv_z = 0.5*ray_count_inv;
     for (int i = 0; i < ray_count; ++i) {
-        sample_value += cascade0.Sample(blinear, float2(uv_x, input.uv.y));
-        uv_x += ray_count_inv;
+        sample_value += cascade0.Sample(blinear, float3(input.uv, uv_z));
+        uv_z += ray_count_inv;
     }
     return sample_value*ray_count_inv;
 }
@@ -56,11 +53,10 @@ void computeCascade(uint3 cascade_coord: SV_DispatchThreadID) {
     uint cascade_index = (cascade_data.texture_indices >> 8) & 0xFF;
     SamplerState nearest = gpu_sampler(0);
     Texture2D<float4> geometry = gpu_texture<Texture2D<float4>>(geometry_index);
-    RWTexture2D<float4> cascade = gpu_texture<RWTexture2D<float4>>(cascade_index);
+    RWTexture3D<float4> cascade = gpu_texture<RWTexture3D<float4>>(cascade_index);
 
-    float width, height;
-    cascade.GetDimensions(width, height);
-    width = width * cascade_data.ray_count_inv;
+    float width, height, depth;
+    cascade.GetDimensions(width, height, depth);
 
     if (cascade_coord.x >= width | cascade_coord.y >= height) {
         return;
@@ -79,26 +75,26 @@ void computeCascade(uint3 cascade_coord: SV_DispatchThreadID) {
         sample_uv += march_step;
         float4 sample_value = geometry.SampleLevel(nearest, sample_uv, 0);
         if (sample_value.a > 0.1) {
-            cascade[int2(int(cascade_coord.z * width) + cascade_coord.x, cascade_coord.y)] = sample_value;// * cascade_data.ray_count_inv;
+            cascade[cascade_coord] = sample_value;
             return;
         }
     }
 
     uint prev_cascade_index = (cascade_data.texture_indices >> 16) & 0xFF;
     if (prev_cascade_index == 255) {
-        cascade[int2(int(cascade_coord.z * width) + cascade_coord.x, cascade_coord.y)] = float4(0.1, 0.0, 0.0, 0.0);
+        cascade[cascade_coord] = float4(0.0, 0.0, 0.0, 0.0);
         return;
     }
 
     SamplerState blinear = gpu_sampler(1);
-    Texture2D<float4> prev_cascade = gpu_texture<Texture2D<float4>>(prev_cascade_index);
-    float4 ray1 = prev_cascade.SampleLevel(blinear, float2((probe_uv.x * 0.25 + cascade_coord.z) * cascade_data.ray_count_inv, probe_uv.y), 0);
-    float4 ray2 = prev_cascade.SampleLevel(blinear, float2((probe_uv.x * 0.25 + cascade_coord.z + 0.25) * cascade_data.ray_count_inv, probe_uv.y), 0);
-    float4 ray3 = prev_cascade.SampleLevel(blinear, float2((probe_uv.x * 0.25 + cascade_coord.z + 0.5) * cascade_data.ray_count_inv, probe_uv.y), 0);
-    float4 ray4 = prev_cascade.SampleLevel(blinear, float2((probe_uv.x*0.25 + cascade_coord.z + 0.75) * cascade_data.ray_count_inv, probe_uv.y), 0);
-    // float4 ray1 = prev_cascade[int2(int((cascade_coord.z * 4 + 0) * 0.5 * width) + cascade_coord.x / 2, cascade_coord.y / 2)];
-    // float4 ray2 = prev_cascade[int2(int((cascade_coord.z * 4 + 1) * 0.5 * width) + cascade_coord.x / 2, cascade_coord.y / 2)];
-    // float4 ray3 = prev_cascade[int2(int((cascade_coord.z * 4 + 2) * 0.5 * width) + cascade_coord.x / 2, cascade_coord.y / 2)];
-    // float4 ray4 = prev_cascade[int2(int((cascade_coord.z * 4 + 3) * 0.5 * width) + cascade_coord.x / 2, cascade_coord.y / 2)];
-    cascade[int2(int(cascade_coord.z * width) + cascade_coord.x, cascade_coord.y)] = 0.25*(ray1 + ray2 + ray3 + ray4);
+    Texture3D<float4> prev_cascade = gpu_texture<Texture3D<float4>>(prev_cascade_index);
+    float4 ray1 = prev_cascade.SampleLevel(blinear, float3(probe_uv, (cascade_coord.z + 0.25 * 0.5) * cascade_data.ray_count_inv), 0);
+    float4 ray2 = prev_cascade.SampleLevel(blinear, float3(probe_uv, (cascade_coord.z + 0.25 * 1.5) * cascade_data.ray_count_inv), 0);
+    float4 ray3 = prev_cascade.SampleLevel(blinear, float3(probe_uv, (cascade_coord.z + 0.25 * 2.5) * cascade_data.ray_count_inv), 0);
+    float4 ray4 = prev_cascade.SampleLevel(blinear, float3(probe_uv, (cascade_coord.z + 0.25 * 3.5) * cascade_data.ray_count_inv), 0);
+    // float4 ray1 = prev_cascade[int3(cascade_coord.x / 2, cascade_coord.y / 2, cascade_coord.z * 4)];
+    // float4 ray2 = prev_cascade[int3(cascade_coord.x / 2, cascade_coord.y / 2, cascade_coord.z * 4+1)];
+    // float4 ray3 = prev_cascade[int3(cascade_coord.x / 2, cascade_coord.y / 2, cascade_coord.z * 4+2)];
+    // float4 ray4 = prev_cascade[int3(cascade_coord.x / 2, cascade_coord.y / 2, cascade_coord.z * 4+3)];
+    cascade[cascade_coord] = 0.25*(ray1 + ray2 + ray3 + ray4);
 }

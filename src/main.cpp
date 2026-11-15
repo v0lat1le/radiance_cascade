@@ -107,15 +107,15 @@ int main() {
         gpu::Texture* texture;
         CascadeData cascade_data;
     };
-    std::vector<Cascade> cascades(3, {});
+    std::vector<Cascade> cascades(5, {});
 
     uint32 cascade_size = 512;
     uint32 base_rays = 16;
     float ray_step = 1.0f/800.0f;
     float ray_start = 0.0f;
-    float ray_end = ray_start+16.0f/800.0f;
+    float ray_end = ray_start+8.0f/800.0f;
     float ray_length_factor = 3.0;
-    float ray_step_factor = 1.0;
+    float ray_step_factor = 1.25;
 
     for (uint32 i=0; i<cascades.size(); ++i) {
         cascades[i].size = cascade_size;
@@ -134,7 +134,8 @@ int main() {
 
         cascades[i].cascade_data.texture_indices = 0;
 
-        texture_desc.extent={.x = cascade_size*base_rays, .y = cascade_size, .z = 1},
+        texture_desc.type = gpu::TextureType::three_d;
+        texture_desc.extent={.x = cascade_size, .y = cascade_size, .z = base_rays},
         texture_requirements = gpu::get_texture_size_align(device, texture_desc);
         cascades[i].texture = gpu::create_texture(device, texture_desc, texture_heap, texture_heap_offset);
         texture_heap_offset += texture_requirements.size;
@@ -248,7 +249,13 @@ int main() {
 
     gpu::wait_idle(device);
 
+    gpu::destroy_pso(compute_cascade_pso);
+    gpu::destroy_pso(render_cascades_pso);
     gpu::destroy_gpu_heap(heap);
+    gpu::destroy_texture(geometry);
+    for (uint32 i=0; i<cascades.size(); ++i) {
+        gpu::destroy_texture(cascades[i].texture);
+    }
     gpu::destroy_texture_heap(texture_heap);
     gpu::destroy_texture_descriptor_heap(texture_descriptor_heap);
     gpu::destroy_sampler_descriptor_heap(sampler_descriptor_heap);
