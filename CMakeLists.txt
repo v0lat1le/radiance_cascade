@@ -7,9 +7,44 @@ add_subdirectory("external/NoGraphicsAPI")
 add_library(RGFW INTERFACE)
 target_include_directories(RGFW INTERFACE external/RGFW)
 
+add_library(imgui)
+file(GLOB IMGUI_SOURCES external/imgui/imgui*.cpp)
+file(GLOB IMGUI_HEADERSexternal/imgui/imgui*.h)
+target_sources(
+    imgui
+    PRIVATE
+        ${IMGUI_SOURCES}
+    PUBLIC
+        FILE_SET HEADERS
+		FILES
+			${IMGUI_HEADERS}
+        BASE_DIRS
+            external/imgui
+)
+target_include_directories(imgui PUBLIC external/imgui/ external/imgui/backends)
+
+add_library(imgui_impl_rgfw INTERFACE)
+target_include_directories(imgui_impl_rgfw INTERFACE external/imgui_impl_rgfw)
+
+add_library(imgui_impl_nographicsapi)
+target_sources(
+    imgui_impl_nographicsapi
+    PRIVATE
+        external/imgui_impl_nographicsapi/imgui_impl_nographicsapi.cpp
+    PUBLIC
+        FILE_SET HEADERS
+		FILES
+			"external/imgui_impl_nographicsapi/imgui_impl_nographicsapi.h"
+        BASE_DIRS
+            external/imgui_impl_nographicsapi
+)
+target_include_directories(imgui_impl_nographicsapi PUBLIC ${PROJECT_SOURCE_DIR})
+target_link_libraries(imgui_impl_nographicsapi PRIVATE imgui NoGraphicsAPI)
+
+
 add_executable(radiance_cascade "src/main.cpp")
 target_include_directories(radiance_cascade PRIVATE "include")
-target_link_libraries(radiance_cascade PRIVATE RGFW NoGraphicsAPI::NoGraphicsAPI)
+target_link_libraries(radiance_cascade PRIVATE RGFW NoGraphicsAPI::NoGraphicsAPI imgui imgui_impl_rgfw imgui_impl_nographicsapi)
 if(APPLE)
     target_link_libraries(radiance_cascade PRIVATE "-framework Cocoa")
 endif()

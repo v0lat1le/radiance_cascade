@@ -34,6 +34,7 @@ float4 fragmentMain(VertexOutput input): SV_Target0 {
     SamplerState blinear = gpu_sampler(1);
 
     float4 sample_value = geometry.Sample(nearest, input.uv);
+
     int ray_count = 16;
     float ray_count_inv = 1.0 / float(ray_count);
     float uv_z = 0.5*ray_count_inv;

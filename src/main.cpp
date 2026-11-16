@@ -1,5 +1,8 @@
 #define RGFW_IMPLEMENTATION
 #include "RGFW.h"
+#define RGFW_IMGUI_IMPLEMENTATION
+#include "imgui_impl_rgfw.h"
+#include "imgui_impl_nographicsapi.h"
 
 #include "NoGraphicsAPI/NoGraphicsAPI.hpp"
 
@@ -68,8 +71,16 @@ namespace {
     void draw_dot(gpu::uint32x2 pos, gpu::uint32 color, gpu::Texture* tex, gpu::CommandBuffer* commands, gpu::GpuCpuRange<byte>& buffer) {
         constexpr gpu::uint32 dot_size = 10;
         gpu::GpuCpuRange<gpu::uint32> staging = allocate<gpu::uint32>(buffer, dot_size*dot_size);
+        for (int i=0; i<dot_size/2; ++i) {
+            for (int j=0; j<dot_size/2; ++j) {
+                staging.cpu[(dot_size/2+j)*dot_size+dot_size/2-i-1] = 
+                staging.cpu[(dot_size/2-j-1)*dot_size+dot_size/2-i-1] =
+                staging.cpu[(dot_size/2+j)*dot_size+dot_size/2+i] = 
+                staging.cpu[(dot_size/2-j-1)*dot_size+dot_size/2+i] =
+                4*(i*i+j*j) < dot_size*dot_size ? color : 0;
+            }
+        }
 
-        std::fill_n(staging.cpu, dot_size*dot_size, color);
         gpu::copy_memory_to_texture(commands, gpu::gpu_range(staging), tex, {
             .offset = {.x = pos.x-dot_size/2, .y = pos.y-dot_size/2},
             .extent = {.x = dot_size, .y = dot_size, .z = 1}
@@ -114,8 +125,8 @@ int main() {
     float ray_step = 1.0f/800.0f;
     float ray_start = 0.0f;
     float ray_end = ray_start+8.0f/800.0f;
-    float ray_length_factor = 3.0;
-    float ray_step_factor = 1.25;
+    float ray_length_factor = 4.0;
+    float ray_step_factor = 1.125;
 
     for (uint32 i=0; i<cascades.size(); ++i) {
         cascades[i].size = cascade_size;
@@ -128,9 +139,8 @@ int main() {
 
         cascades[i].cascade_data.ray_start = ray_start;
         cascades[i].cascade_data.ray_end = ray_end;
-        float ray_len = ray_end-ray_start;
         ray_start = ray_end;
-        ray_end = ray_start + ray_len*ray_length_factor;
+        ray_end = ray_end*ray_length_factor;
 
         cascades[i].cascade_data.texture_indices = 0;
 
@@ -186,8 +196,63 @@ int main() {
     }
     cascades.back().cascade_data.texture_indices |= (255 << 16);
 
+    
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    io.ConfigFlags |= ImGuiConfigFlags_IsSRGB;
+
+    ImGui::StyleColorsDark();
+    // convert_imgui_style_to_linear_HACK();  // TODO: do this in the shader?
+
+    ImGui_ImplRgfw_InitForOther(window, true);
+
+    struct BackendUserData {
+        gpu::Device* device;
+        gpu::CommandBuffer* commands;
+        gpu::GpuCpuRange<byte> frame_heap;
+        gpu::TextureHeap texture_heap;
+        gpu::uint64 texture_heap_offset;
+        gpu::TextureDescriptorHeap* texture_descriptor_heap;
+        gpu::uint32 texture_slot;
+    };
+    BackendUserData user_data {.device = device, .texture_heap = texture_heap, .texture_heap_offset = texture_heap_offset, .texture_descriptor_heap = texture_descriptor_heap, .texture_slot=static_cast<gpu::uint32>(cascades.size()+1) };
+    ImGui_ImplNoGraphicsAPI_Init({
+        .device = device,
+        .nearest_sampler_slot = 0,
+        .linear_sampler_slot = 1,
+        .user_data = &user_data,
+        .allocate_frame_memory = [](void* user_data, gpu::uint64 size, gpu::uint64 alignment) {
+            BackendUserData* backend_data = static_cast<BackendUserData*>(user_data);
+            return allocate<gpu::byte>(backend_data->frame_heap, size, alignment);
+        },
+        .create_texture = [](void* user_data, const gpu::TextureDesc& desc) {
+            BackendUserData* backend_data = static_cast<BackendUserData*>(user_data);
+            const gpu::SizeAlign texture_size = gpu::get_texture_size_align(backend_data->device, desc);
+            gpu::Texture* texture = gpu::create_texture(backend_data->device, desc, backend_data->texture_heap, backend_data->texture_heap_offset);
+            backend_data->texture_heap_offset = (backend_data->texture_heap_offset + texture_size.align - 1) & ~(texture_size.align - 1);
+            backend_data->texture_heap_offset += texture_size.size;
+            const gpu::uint32 texture_slot = backend_data->texture_slot++;
+            gpu::write_texture_descriptor(backend_data->texture_descriptor_heap, texture_slot, texture, gpu::TextureDescriptorType::sampled);
+            gpu::initialize_texture(backend_data->commands, texture);  // can be done in update_texture
+            return ImGui_ImplNoGraphicsAPI_Texture{ .slot = texture_slot, .texture_data = texture };
+        },
+        .update_texture = [](void* user_data, const ImGui_ImplNoGraphicsAPI_Texture& texture, const gpu::TextureCopyDesc& copy_desc, gpu::Span<gpu::byte> data) {
+            BackendUserData* backend_data = static_cast<BackendUserData*>(user_data);
+            ImGui_ImplNoGraphicsAPI_UpdateTexture(backend_data->commands, static_cast<gpu::Texture*>(texture.texture_data), copy_desc, data);
+        },
+        .destroy_texture = [](void* /*user_data*/, const ImGui_ImplNoGraphicsAPI_Texture& texture) {
+            gpu::destroy_texture(static_cast<gpu::Texture*>(texture.texture_data));
+        }
+    });
+
+    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+
     while (RGFW_window_shouldClose(window) == RGFW_FALSE) {
         update_surface(window);
+        RGFW_pollEvents();
 
         if (latest_completion.value >= 2) {
             gpu::wait_timeline({ .semaphore = latest_completion.semaphore, .value = latest_completion.value - 1 });
@@ -206,25 +271,35 @@ int main() {
             gpu::end_commands(commands);
             continue;
         }
-
-        RGFW_event event;
-        while (RGFW_window_checkEvent(window, &event)) {
-            if (event.type == RGFW_mouseButtonPressed and event.button.value == RGFW_mouseLeft and event.mouse.inWindow) {
-                std::int32_t x, y;
-                RGFW_window_getMouse(window, &x, &y);                
-                draw_dot({static_cast<gpu::uint32>(x), static_cast<gpu::uint32>(y)}, 0xFFFFFFFF, geometry, commands, frame_heap);
+        
+        ImGui_ImplRgfw_NewFrame();
+        ImGui_ImplNoGraphicsAPI_NewFrame();
+        ImGui::NewFrame();
+        if (!io.WantCaptureMouse) {
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+                gpu::uint32 color = static_cast<gpu::uint32>(clear_color.x*255+0.5) << 16 |
+                static_cast<gpu::uint32>(clear_color.y*255+0.5) << 8 |
+                static_cast<gpu::uint32>(clear_color.z*255+0.5) |
+                static_cast<gpu::uint32>(clear_color.w*255+0.5) << 24;
+                draw_dot({static_cast<gpu::uint32>(io.MousePos.x), static_cast<gpu::uint32>(io.MousePos.y)}, color, geometry, commands, frame_heap);
             }
-            if (event.type == RGFW_mouseButtonPressed and event.button.value == RGFW_mouseRight and event.mouse.inWindow) {
-                std::int32_t x, y;
-                RGFW_window_getMouse(window, &x, &y);                
-                draw_dot({static_cast<gpu::uint32>(x), static_cast<gpu::uint32>(y)}, 0xFF000000, geometry, commands, frame_heap);
+
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+                draw_dot({static_cast<gpu::uint32>(io.MousePos.x), static_cast<gpu::uint32>(io.MousePos.y)}, 0, geometry, commands, frame_heap);
             }
         }
+        {
+            ImGui::Begin("Hello, world!");
+                ImGui::ColorEdit3("clear color", &clear_color.x);
+                ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / io.Framerate, io.Framerate);
+            ImGui::End();
+        }
+        ImGui::Render();
 
         gpu::set_texture_descriptor_heap(commands, texture_descriptor_heap);
         gpu::set_sampler_descriptor_heap(commands, sampler_descriptor_heap);
 
-        for (gpu::uint32 i=cascades.size(); i-->0;) {
+        for (auto i=cascades.size(); i-->0;) {
             gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
             *cascade_data.cpu = cascades[i].cascade_data;
             bind_pso(commands, compute_cascade_pso);
@@ -234,12 +309,18 @@ int main() {
             gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
         }
 
+        user_data.commands = commands;
+        user_data.frame_heap = frame_heap;
+        ImGui_ImplNoGraphicsAPI_UpdateTextures(ImGui::GetDrawData());
+
         gpu::begin_render_pass(commands, {
             .colors = { {.render_view = frame.render_view, .load = gpu::LoadOp::clear } },
         });
 
         bind_pso(commands, render_cascades_pso);
         draw(commands, {}, 3);
+
+        ImGui_ImplNoGraphicsAPI_RenderDrawData(commands, ImGui::GetDrawData());
 
         gpu::end_render_pass(commands);
         gpu::end_commands(commands);
@@ -248,6 +329,10 @@ int main() {
     }
 
     gpu::wait_idle(device);
+
+    ImGui_ImplNoGraphicsAPI_Shutdown();
+    ImGui_ImplRgfw_Shutdown();
+    ImGui::DestroyContext();
 
     gpu::destroy_pso(compute_cascade_pso);
     gpu::destroy_pso(render_cascades_pso);

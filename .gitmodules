@@ -4,3 +4,12 @@
 [submodule "external/NoGraphicsAPI"]
 	path = external/NoGraphicsAPI
 	url = https://github.com/sebbbi/NoGraphicsAPI.git
+[submodule "external/imgui"]
+	path = external/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "external/imgui_impl_rgfw"]
+	path = external/imgui_impl_rgfw
+	url = https://github.com/v0lat1le/imgui_impl_rgfw.h
+[submodule "external/imgui_impl_nographicsapi"]
+	path = external/imgui_impl_nographicsapi
+	url = https://github.com/v0lat1le/imgui_impl_nographicsapi
