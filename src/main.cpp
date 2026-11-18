@@ -114,14 +114,14 @@ int main() {
 
     struct Cascade {
         gpu::uint32 size;
-        gpu::uint32 ray_count;
+        gpu::uint32 ray_bundles;
         gpu::Texture* texture;
         CascadeData cascade_data;
     };
     std::vector<Cascade> cascades(5, {});
 
     uint32 cascade_size = 512;
-    uint32 base_rays = 16;
+    uint32 base_ray_bundles = 4;
     float ray_step = 1.0f/800.0f;
     float ray_start = 0.0f;
     float ray_end = ray_start+8.0f/800.0f;
@@ -130,10 +130,10 @@ int main() {
 
     for (uint32 i=0; i<cascades.size(); ++i) {
         cascades[i].size = cascade_size;
-        cascades[i].ray_count = base_rays;
+        cascades[i].ray_bundles = base_ray_bundles;
 
-        cascades[i].cascade_data.angle_delta = 2.0f*3.1415927f/cascades[i].ray_count;
-        cascades[i].cascade_data.ray_count_inv = 1.0f/cascades[i].ray_count;
+        cascades[i].cascade_data.angle_delta = 0.25f*2.0f*3.1415927f/cascades[i].ray_bundles;
+        cascades[i].cascade_data.ray_count_inv = 0.25f/cascades[i].ray_bundles;
         cascades[i].cascade_data.ray_step = ray_step;
         ray_step *= ray_step_factor;
 
@@ -145,12 +145,12 @@ int main() {
         cascades[i].cascade_data.texture_indices = 0;
 
         texture_desc.type = gpu::TextureType::three_d;
-        texture_desc.extent={.x = cascade_size, .y = cascade_size, .z = base_rays},
+        texture_desc.extent={.x = cascade_size, .y = cascade_size, .z = base_ray_bundles},
         texture_requirements = gpu::get_texture_size_align(device, texture_desc);
         cascades[i].texture = gpu::create_texture(device, texture_desc, texture_heap, texture_heap_offset);
         texture_heap_offset += texture_requirements.size;
         cascade_size = cascade_size/2;
-        base_rays *= 4;
+        base_ray_bundles *= 4;
     }
 
     {
@@ -248,7 +248,7 @@ int main() {
         }
     });
 
-    ImVec4 clear_color = ImVec4(0.45f, 0.55f, 0.60f, 1.00f);
+    ImVec4 clear_color = ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
 
     while (RGFW_window_shouldClose(window) == RGFW_FALSE) {
         update_surface(window);
@@ -303,7 +303,7 @@ int main() {
             gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
             *cascade_data.cpu = cascades[i].cascade_data;
             bind_pso(commands, compute_cascade_pso);
-            dispatch(commands, cascade_data.gpu, {.x = cascades[i].size/16, .y = cascades[i].size/16, .z = cascades[i].ray_count});
+            dispatch(commands, cascade_data.gpu, {.x = cascades[i].size/16, .y = cascades[i].size/16, .z = cascades[i].ray_bundles});
             barrier(commands,
             gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
             gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
