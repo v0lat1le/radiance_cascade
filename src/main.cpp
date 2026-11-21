@@ -13,6 +13,9 @@
 #include "shared_types.h"
 
 
+#define SCALE 8
+#define N_CASCADES 7
+
 namespace {
 #if defined(__APPLE__)
     id get_metal_layer(RGFW_window* window) {
@@ -69,20 +72,29 @@ namespace {
     }
 
     void draw_dot(gpu::uint32x2 pos, gpu::uint32 color, gpu::Texture* tex, gpu::CommandBuffer* commands, gpu::GpuCpuRange<byte>& buffer) {
-        constexpr gpu::uint32 dot_size = 10;
+        constexpr gpu::uint32 dot_size = 1;
         gpu::GpuCpuRange<gpu::uint32> staging = allocate<gpu::uint32>(buffer, dot_size*dot_size);
-        for (int i=0; i<dot_size/2; ++i) {
-            for (int j=0; j<dot_size/2; ++j) {
-                staging.cpu[(dot_size/2+j)*dot_size+dot_size/2-i-1] = 
-                staging.cpu[(dot_size/2-j-1)*dot_size+dot_size/2-i-1] =
-                staging.cpu[(dot_size/2+j)*dot_size+dot_size/2+i] = 
-                staging.cpu[(dot_size/2-j-1)*dot_size+dot_size/2+i] =
+        int half_size = dot_size/2;
+        for (int i=0; i<half_size; ++i) {
+            for (int j=0; j<half_size; ++j) {
+                staging.cpu[(half_size+j)*dot_size+half_size-i-1] = 
+                staging.cpu[(half_size-j-1)*dot_size+half_size-i-1] =
+                staging.cpu[(half_size+j)*dot_size+half_size+i] = 
+                staging.cpu[(half_size-j-1)*dot_size+half_size+i] =
                 4*(i*i+j*j) < dot_size*dot_size ? color : 0;
+            }
+        }
+        if (dot_size & 1) {
+            for (int i=0; i<half_size+1; ++i) {
+                staging.cpu[(half_size+i)*dot_size+half_size-i] = 
+                staging.cpu[(half_size-i)*dot_size+half_size-i] =
+                staging.cpu[(half_size+i)*dot_size+half_size+i] = 
+                staging.cpu[(half_size-i)*dot_size+half_size+i] = color;
             }
         }
 
         gpu::copy_memory_to_texture(commands, gpu::gpu_range(staging), tex, {
-            .offset = {.x = pos.x-dot_size/2, .y = pos.y-dot_size/2},
+            .offset = {.x = pos.x/SCALE-dot_size/2, .y = pos.y/SCALE-dot_size/2},
             .extent = {.x = dot_size, .y = dot_size, .z = 1}
         });
     }
@@ -98,66 +110,66 @@ int main() {
     gpu::CommandPool* command_pools[] = { gpu::create_command_pool(device), gpu::create_command_pool(device) };
     gpu::GpuHeap heap = gpu::create_gpu_heap(device, 32*1024*1024);
 
-    gpu::TextureHeap texture_heap = gpu::create_texture_heap(device, 128*1024*1024);
+    gpu::TextureHeap texture_heap = gpu::create_texture_heap(device, 1024*1024*1024);
     gpu::uint64 texture_heap_offset = 0;
-    gpu::TextureDescriptorHeap* texture_descriptor_heap = gpu::create_texture_descriptor_heap(device, 16);
+    gpu::TextureDescriptorHeap* texture_descriptor_heap = gpu::create_texture_descriptor_heap(device, 32);
     gpu::SamplerDescriptorHeap* sampler_descriptor_heap = gpu::create_sampler_descriptor_heap(device, 2);
 
     gpu::TextureDesc texture_desc{
-        .extent={.x = 800, .y = 800, .z = 1},
+        .extent={.x = 800/SCALE, .y = 800/SCALE, .z = 1},
         .format = gpu::Format::bgra8_unorm,
         .usage = gpu::TextureUsage::sampled | gpu::TextureUsage::transfer_destination
     };
     gpu::SizeAlign texture_requirements = gpu::get_texture_size_align(device, texture_desc);
+    texture_heap_offset = align_up(texture_heap_offset, texture_requirements.align);
     gpu::Texture* geometry = gpu::create_texture(device, texture_desc, texture_heap, texture_heap_offset);
     texture_heap_offset += texture_requirements.size;
 
     struct Cascade {
-        gpu::uint32 size;
-        gpu::uint32 ray_bundles;
-        gpu::Texture* texture;
-        CascadeData cascade_data;
+        gpu::uint32 width;
+        gpu::uint32 height;
+        gpu::uint32 cascade_cones;
+        gpu::Texture* traces_texture;
+        gpu::Texture* cones_texture;
+        gpu::uint8 traces_texture_slot;
+        gpu::uint8 cones_texture_slot;
     };
-    std::vector<Cascade> cascades(5, {});
+    std::vector<Cascade> cascades(N_CASCADES, {});
 
-    uint32 cascade_size = 512;
-    uint32 base_ray_bundles = 4;
-    float ray_step = 1.0f/800.0f;
-    float ray_start = 0.0f;
-    float ray_end = ray_start+8.0f/800.0f;
-    float ray_length_factor = 4.0;
-    float ray_step_factor = 1.125;
+    uint32 cascade_width = texture_desc.extent.x;
+    uint32 cascade_height = texture_desc.extent.y;
+    uint32 cascade_cones = 1;
 
+    texture_desc.type = gpu::TextureType::three_d;
+    texture_desc.format = gpu::Format::rgba16_float;
+    texture_desc.usage = gpu::TextureUsage::storage | gpu::TextureUsage::sampled;
     for (uint32 i=0; i<cascades.size(); ++i) {
-        cascades[i].size = cascade_size;
-        cascades[i].ray_bundles = base_ray_bundles;
+        cascades[i].height = cascade_height;
+        cascades[i].width = cascade_width;
+        cascades[i].cascade_cones = cascade_cones;
 
-        cascades[i].cascade_data.angle_delta = 0.25f*2.0f*3.1415927f/cascades[i].ray_bundles;
-        cascades[i].cascade_data.ray_count_inv = 0.25f/cascades[i].ray_bundles;
-        cascades[i].cascade_data.ray_step = ray_step;
-        ray_step *= ray_step_factor;
-
-        cascades[i].cascade_data.ray_start = ray_start;
-        cascades[i].cascade_data.ray_end = ray_end;
-        ray_start = ray_end;
-        ray_end = ray_end*ray_length_factor;
-
-        cascades[i].cascade_data.texture_indices = 0;
-
-        texture_desc.type = gpu::TextureType::three_d;
-        texture_desc.extent={.x = cascade_size, .y = cascade_size, .z = base_ray_bundles},
+        texture_desc.extent = {.x = cascade_width, .y = cascade_height, .z = cascade_cones+1};
         texture_requirements = gpu::get_texture_size_align(device, texture_desc);
-        cascades[i].texture = gpu::create_texture(device, texture_desc, texture_heap, texture_heap_offset);
+        texture_heap_offset = align_up(texture_heap_offset, texture_requirements.align);
+        cascades[i].traces_texture = gpu::create_texture(device, texture_desc, texture_heap, texture_heap_offset);
         texture_heap_offset += texture_requirements.size;
-        cascade_size = cascade_size/2;
-        base_ray_bundles *= 4;
+
+        texture_desc.extent = {.x = cascade_width, .y = cascade_height, .z = cascade_cones};
+        texture_requirements = gpu::get_texture_size_align(device, texture_desc);
+        texture_heap_offset = align_up(texture_heap_offset, texture_requirements.align);
+        cascades[i].cones_texture = gpu::create_texture(device, texture_desc, texture_heap, texture_heap_offset);
+        texture_heap_offset += texture_requirements.size;
+
+        cascade_width = (cascade_width+1)/2;
+        cascade_cones = cascade_cones*2;
     }
 
     {
         gpu::CommandBuffer* texture_commands = gpu::begin_commands(command_pools[0]);
         gpu::initialize_texture(texture_commands, geometry);
         for (uint32 i=0; i<cascades.size(); ++i) {
-            gpu::initialize_texture(texture_commands, cascades[i].texture);
+            gpu::initialize_texture(texture_commands, cascades[i].traces_texture);
+            gpu::initialize_texture(texture_commands, cascades[i].cones_texture);
         }
         gpu::end_commands(texture_commands);
         latest_completion.value++;
@@ -166,14 +178,32 @@ int main() {
 
     auto shader = read_file("shaders/shader.spv");
     gpu::PSO* render_cascades_pso = create_graphics_pso(device, {
-        .vertex = {.code = {shader.data(), shader.size()}, .entry_point = "vertexMain"},
-        .fragment = {.code = {shader.data(), shader.size()}, .entry_point = "fragmentMain"},
+        .vertex = {.code = {shader.data(), shader.size()}, .entry_point = "main_vertex"},
+        .fragment = {.code = {shader.data(), shader.size()}, .entry_point = "main_fragment"},
         .color_targets = { { .format = gpu::Format::bgra8_srgb } }
     });
 
-    gpu::PSO* compute_cascade_pso = gpu::create_compute_pso(device, {
+    gpu::PSO* compute_trace_pso = gpu::create_compute_pso(device, {
         .code = {shader.data(), shader.size()},
-        .entry_point = "computeCascade",
+        .entry_point = "compute_trace",
+        .threadgroup_size = {.x = 16, .y = 16, .z = 1}
+    });
+
+    gpu::PSO* approximate_traces_pso = gpu::create_compute_pso(device, {
+        .code = {shader.data(), shader.size()},
+        .entry_point = "approximate_trace",
+        .threadgroup_size = {.x = 16, .y = 16, .z = 1}
+    });
+
+    gpu::PSO* compute_cone_fluence_pso = gpu::create_compute_pso(device, {
+        .code = {shader.data(), shader.size()},
+        .entry_point = "compute_cone_fluence",
+        .threadgroup_size = {.x = 16, .y = 16, .z = 1}
+    });
+
+    gpu::PSO* accumulate_cone_fluence_pso = gpu::create_compute_pso(device, {
+        .code = {shader.data(), shader.size()},
+        .entry_point = "accumulate_cone_fluence",
         .threadgroup_size = {.x = 16, .y = 16, .z = 1}
     });
 
@@ -190,11 +220,12 @@ int main() {
         .address_v = gpu::AddressMode::clamp_to_edge,
     });
     gpu::write_texture_descriptor(texture_descriptor_heap, 0, geometry, gpu::TextureDescriptorType::sampled);
-    for (uint32 i=0; i<cascades.size(); ++i) {
-        cascades[i].cascade_data.texture_indices = ((i+1) << 8) | ((i+2) << 16);
-        gpu::write_texture_descriptor(texture_descriptor_heap, i+1, cascades[i].texture, gpu::TextureDescriptorType::sampled);
+    for (uint8 i=0; i<cascades.size(); ++i) {
+        cascades[i].traces_texture_slot = i+1;
+        cascades[i].cones_texture_slot = static_cast<gpu::uint8>(i+1+cascades.size());
+        gpu::write_texture_descriptor(texture_descriptor_heap, cascades[i].traces_texture_slot, cascades[i].traces_texture, gpu::TextureDescriptorType::storage);
+        gpu::write_texture_descriptor(texture_descriptor_heap, cascades[i].cones_texture_slot, cascades[i].cones_texture, gpu::TextureDescriptorType::storage);
     }
-    cascades.back().cascade_data.texture_indices |= (255 << 16);
 
     
     IMGUI_CHECKVERSION();
@@ -218,7 +249,7 @@ int main() {
         gpu::TextureDescriptorHeap* texture_descriptor_heap;
         gpu::uint32 texture_slot;
     };
-    BackendUserData user_data {.device = device, .texture_heap = texture_heap, .texture_heap_offset = texture_heap_offset, .texture_descriptor_heap = texture_descriptor_heap, .texture_slot=static_cast<gpu::uint32>(cascades.size()+1) };
+    BackendUserData user_data {.device = device, .texture_heap = texture_heap, .texture_heap_offset = texture_heap_offset, .texture_descriptor_heap = texture_descriptor_heap, .texture_slot=static_cast<gpu::uint32>(2*cascades.size()+1) };
     ImGui_ImplNoGraphicsAPI_Init({
         .device = device,
         .nearest_sampler_slot = 0,
@@ -231,6 +262,7 @@ int main() {
         .create_texture = [](void* user_data, const gpu::TextureDesc& desc) {
             BackendUserData* backend_data = static_cast<BackendUserData*>(user_data);
             const gpu::SizeAlign texture_size = gpu::get_texture_size_align(backend_data->device, desc);
+            backend_data->texture_heap_offset = align_up(backend_data->texture_heap_offset, texture_size.align);
             gpu::Texture* texture = gpu::create_texture(backend_data->device, desc, backend_data->texture_heap, backend_data->texture_heap_offset);
             backend_data->texture_heap_offset = (backend_data->texture_heap_offset + texture_size.align - 1) & ~(texture_size.align - 1);
             backend_data->texture_heap_offset += texture_size.size;
@@ -299,30 +331,64 @@ int main() {
         gpu::set_texture_descriptor_heap(commands, texture_descriptor_heap);
         gpu::set_sampler_descriptor_heap(commands, sampler_descriptor_heap);
 
-        for (auto i=cascades.size(); i-->0;) {
+        constexpr int n_traced=3;
+        for (int i=0; i<n_traced && i<cascades.size(); ++i) {
             gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
-            *cascade_data.cpu = cascades[i].cascade_data;
-            bind_pso(commands, compute_cascade_pso);
-            dispatch(commands, cascade_data.gpu, {.x = cascades[i].size/16, .y = cascades[i].size/16, .z = cascades[i].ray_bundles});
+            cascade_data.cpu->texture_indices = cascades[i].traces_texture_slot << 8;
+            bind_pso(commands, compute_trace_pso);
+            dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width+15)/16, .y = (cascades[i].height+15)/16, .z = cascades[i].cascade_cones+1});
             barrier(commands,
-            gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
-            gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
+                gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
+                gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
+        }
+        for (int i=n_traced; i<cascades.size(); ++i) {
+            gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
+            cascade_data.cpu->texture_indices = cascades[i].traces_texture_slot;
+            bind_pso(commands, approximate_traces_pso);
+            dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width+15)/16, .y = (cascades[i].height+15)/16, .z = cascades[i].cascade_cones+1});
+            barrier(commands,
+                gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
+                gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
+        }
+        {
+            gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
+            cascade_data.cpu->texture_indices = cascades.back().cones_texture_slot | (cascades.back().traces_texture_slot << 8);
+            bind_pso(commands, compute_cone_fluence_pso);
+            dispatch(commands, cascade_data.gpu, {.x = (cascades.back().width+15)/16, .y = (cascades.back().height+15)/16, .z = cascades.back().cascade_cones});
+            barrier(commands,
+                gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
+                gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
+        }
+        for (auto i=cascades.size()-1; i-->0;) {
+            gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
+            cascade_data.cpu->texture_indices = cascades[i].cones_texture_slot | (cascades[i].traces_texture_slot << 8);
+            bind_pso(commands, accumulate_cone_fluence_pso);
+            dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width+15)/16, .y = (cascades[i].height+15)/16, .z = cascades[i].cascade_cones});
+            barrier(commands,
+                gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
+                gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
         }
 
-        user_data.commands = commands;
-        user_data.frame_heap = frame_heap;
-        ImGui_ImplNoGraphicsAPI_UpdateTextures(ImGui::GetDrawData());
+        {
+            gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
 
-        gpu::begin_render_pass(commands, {
-            .colors = { {.render_view = frame.render_view, .load = gpu::LoadOp::clear } },
-        });
+            user_data.commands = commands;
+            user_data.frame_heap = frame_heap;
+            ImGui_ImplNoGraphicsAPI_UpdateTextures(ImGui::GetDrawData());
 
-        bind_pso(commands, render_cascades_pso);
-        draw(commands, {}, 3);
+            gpu::begin_render_pass(commands, {
+                .colors = { {.render_view = frame.render_view, .load = gpu::LoadOp::clear } },
+            });
 
-        ImGui_ImplNoGraphicsAPI_RenderDrawData(commands, ImGui::GetDrawData());
+            //cascade_data.cpu->texture_indices = cascades.back().traces_texture_slot << 8;
+            cascade_data.cpu->texture_indices = cascades.front().cones_texture_slot << 8;
+            bind_pso(commands, render_cascades_pso);
+            draw(commands, cascade_data.gpu, 3);
 
-        gpu::end_render_pass(commands);
+            ImGui_ImplNoGraphicsAPI_RenderDrawData(commands, ImGui::GetDrawData());
+
+            gpu::end_render_pass(commands);
+        }
         gpu::end_commands(commands);
         latest_completion.value++;
         gpu::submit_and_present(device, { .commands = {commands}, .completion = latest_completion });
@@ -334,12 +400,16 @@ int main() {
     ImGui_ImplRgfw_Shutdown();
     ImGui::DestroyContext();
 
-    gpu::destroy_pso(compute_cascade_pso);
+    gpu::destroy_pso(compute_trace_pso);
+    gpu::destroy_pso(approximate_traces_pso);
+    gpu::destroy_pso(compute_cone_fluence_pso);
+    gpu::destroy_pso(accumulate_cone_fluence_pso);
     gpu::destroy_pso(render_cascades_pso);
     gpu::destroy_gpu_heap(heap);
     gpu::destroy_texture(geometry);
     for (uint32 i=0; i<cascades.size(); ++i) {
-        gpu::destroy_texture(cascades[i].texture);
+        gpu::destroy_texture(cascades[i].traces_texture);
+        gpu::destroy_texture(cascades[i].cones_texture);
     }
     gpu::destroy_texture_heap(texture_heap);
     gpu::destroy_texture_descriptor_heap(texture_descriptor_heap);
