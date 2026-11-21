@@ -11,4 +11,5 @@ struct CascadeData {
     float angle_delta;
     float ray_count_inv;
     uint32_t texture_indices;
+    uint32_t padding[2];
 };

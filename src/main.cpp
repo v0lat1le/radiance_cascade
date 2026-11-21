@@ -102,7 +102,7 @@ namespace {
 
 int main() {
     RGFW_init("radiance-cascade", 0);
-    RGFW_window* window = RGFW_createWindow("radiance-cascade", 0, 0, 800, 800, RGFW_windowCenter | RGFW_windowScaleToMonitor);
+    RGFW_window* window = RGFW_createWindow("radiance-cascade", 0, 0, 800, 800, RGFW_windowCenter);
 
     gpu::Device* device = gpu::create_device({ .window = init_surface(window), .swapchain_format = gpu::Format::bgra8_srgb }).device;
 
@@ -134,7 +134,7 @@ int main() {
         gpu::uint8 traces_texture_slot;
         gpu::uint8 cones_texture_slot;
     };
-    std::vector<Cascade> cascades(N_CASCADES, {});
+    std::vector<Cascade> cascades(N_CASCADES);
 
     uint32 cascade_width = texture_desc.extent.x;
     uint32 cascade_height = texture_desc.extent.y;
@@ -167,6 +167,10 @@ int main() {
     {
         gpu::CommandBuffer* texture_commands = gpu::begin_commands(command_pools[0]);
         gpu::initialize_texture(texture_commands, geometry);
+        gpu::GpuCpuRange<gpu::byte> init_heap = heap.range;
+        gpu::GpuCpuRange<gpu::uint32> zeros = allocate<gpu::uint32>(init_heap, cascades[0].width*cascades[0].height);
+        std::memset(zeros.cpu, 0, zeros.size);
+        gpu::copy_memory_to_texture(texture_commands, gpu::gpu_range(zeros), geometry);
         for (uint32 i=0; i<cascades.size(); ++i) {
             gpu::initialize_texture(texture_commands, cascades[i].traces_texture);
             gpu::initialize_texture(texture_commands, cascades[i].cones_texture);
@@ -176,7 +180,7 @@ int main() {
         gpu::submit(device, {.commands = {texture_commands}, .completion = latest_completion});
     }
 
-    auto shader = read_file("shaders/shader.spv");
+    auto shader = read_file("shaders/shader" SHADER_EXTENSION);
     gpu::PSO* render_cascades_pso = create_graphics_pso(device, {
         .vertex = {.code = {shader.data(), shader.size()}, .entry_point = "main_vertex"},
         .fragment = {.code = {shader.data(), shader.size()}, .entry_point = "main_fragment"},
