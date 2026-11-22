@@ -12,7 +12,7 @@ target_include_directories(RGFW INTERFACE external/RGFW)
 
 add_library(imgui)
 file(GLOB IMGUI_SOURCES external/imgui/imgui*.cpp)
-file(GLOB IMGUI_HEADERSexternal/imgui/imgui*.h)
+file(GLOB IMGUI_HEADERS external/imgui/imgui*.h)
 target_sources(
     imgui
     PRIVATE
@@ -60,6 +60,7 @@ if(APPLE)
 else()
     set(SHADER_EXTENSION ".spv")
 endif()
+
 function (target_add_slang_shader TARGET SHADER_SOURCE)
     cmake_path(GET SHADER_SOURCE FILENAME SHADER_OUTPUT)
     cmake_path(REPLACE_EXTENSION SHADER_OUTPUT LAST_ONLY ${SHADER_EXTENSION})
