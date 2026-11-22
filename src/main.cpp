@@ -1,6 +1,4 @@
-#define RGFW_IMPLEMENTATION
 #include "RGFW.h"
-#define RGFW_IMGUI_IMPLEMENTATION
 #include "imgui_impl_rgfw.h"
 #include "imgui_impl_nographicsapi.h"
 
@@ -19,9 +17,15 @@
 
 namespace {
 #if defined(__APPLE__)
+    using id = void*;
+    using SEL = void*;
+    extern "C" id sel_getUid(const char*);
+    extern "C" id objc_msgSend();
+    extern "C" SEL sel_registerName(const char*);
+
     id get_metal_layer(RGFW_window* window) {
         void* view = RGFW_window_getView_OSX(window);
-        return ((id(*)(id, SEL))objc_msgSend)((id)view, sel_getUid("layer"));
+        return ((id(*)(id, SEL))objc_msgSend)(view, sel_getUid("layer"));
     }
     void* init_surface(RGFW_window* window) {
         RGFW_window_setLayer_OSX(window, RGFW_getLayer_OSX());
@@ -29,12 +33,16 @@ namespace {
     }
 
     void update_surface(RGFW_window* window) {
+        struct CGSize {
+            double width;
+            double height;
+        };
         id layer = get_metal_layer(window);
-        ((void (*)(id, SEL, CGFloat))objc_msgSend)(layer, sel_registerName("setContentsScale:"), RGFW_window_getMonitor(window)->pixelRatio);
+        ((void (*)(id, SEL, double))objc_msgSend)(layer, sel_registerName("setContentsScale:"), RGFW_window_getMonitor(window)->pixelRatio);
 
         i32 pixel_width, pixel_height;
         RGFW_window_getSizeInPixels(window, &pixel_width, &pixel_height);
-        ((void (*)(id, SEL, CGSize))objc_msgSend)(layer, sel_registerName("setDrawableSize:"), CGSizeMake(pixel_width, pixel_height));
+        ((void (*)(id, SEL, CGSize))objc_msgSend)(layer, sel_registerName("setDrawableSize:"), CGSize{static_cast<double>(pixel_width), static_cast<double>(pixel_height)});
     }
 #else
     void* init_surface(RGFW_window* window) {

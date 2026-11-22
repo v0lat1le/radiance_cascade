@@ -5,10 +5,12 @@ project ("radiance_cascade")
 if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "26.0")
 endif()
-add_subdirectory("external/NoGraphicsAPI")
+add_subdirectory(external/NoGraphicsAPI)
 
-add_library(RGFW INTERFACE)
-target_include_directories(RGFW INTERFACE external/RGFW)
+add_library(RGFW external/RGFW/RGFW.h)
+set_source_files_properties(external/RGFW/RGFW.h PROPERTIES LANGUAGE C)
+target_compile_definitions(RGFW PUBLIC RGFW_EXPORT PRIVATE RGFW_IMPLEMENTATION)
+target_include_directories(RGFW PUBLIC external/RGFW)
 
 add_library(imgui)
 file(GLOB IMGUI_SOURCES external/imgui/imgui*.cpp)
@@ -26,8 +28,11 @@ target_sources(
 )
 target_include_directories(imgui PUBLIC external/imgui/ external/imgui/backends)
 
-add_library(imgui_impl_rgfw INTERFACE)
-target_include_directories(imgui_impl_rgfw INTERFACE external/imgui_impl_rgfw)
+add_library(imgui_impl_rgfw external/imgui_impl_rgfw/imgui_impl_rgfw.h)
+set_source_files_properties(external/imgui_impl_rgfw/imgui_impl_rgfw.h PROPERTIES LANGUAGE CXX)
+target_compile_definitions(imgui_impl_rgfw PRIVATE RGFW_IMGUI_IMPLEMENTATION)
+target_include_directories(imgui_impl_rgfw PUBLIC external/imgui_impl_rgfw)
+target_link_libraries(imgui_impl_rgfw PRIVATE RGFW imgui)
 
 add_library(imgui_impl_nographicsapi)
 target_sources(
@@ -37,7 +42,7 @@ target_sources(
     PUBLIC
         FILE_SET HEADERS
 		FILES
-			"external/imgui_impl_nographicsapi/imgui_impl_nographicsapi.h"
+			external/imgui_impl_nographicsapi/imgui_impl_nographicsapi.h
         BASE_DIRS
             external/imgui_impl_nographicsapi
 )
@@ -45,7 +50,7 @@ target_include_directories(imgui_impl_nographicsapi PUBLIC ${PROJECT_SOURCE_DIR}
 target_link_libraries(imgui_impl_nographicsapi PRIVATE imgui NoGraphicsAPI)
 
 
-add_executable(radiance_cascade "src/main.cpp")
+add_executable(radiance_cascade src/main.cpp)
 target_include_directories(radiance_cascade PRIVATE "include")
 target_link_libraries(radiance_cascade PRIVATE RGFW NoGraphicsAPI::NoGraphicsAPI imgui imgui_impl_rgfw imgui_impl_nographicsapi)
 if(APPLE)
@@ -96,4 +101,4 @@ function (target_add_slang_shader TARGET SHADER_SOURCE)
     target_compile_definitions(${TARGET} PRIVATE SHADER_EXTENSION="${SHADER_EXTENSION}")
 endfunction()
 
-target_add_slang_shader(radiance_cascade "src/shader.slang")
+target_add_slang_shader(radiance_cascade src/shader.slang)
