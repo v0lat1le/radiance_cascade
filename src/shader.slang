@@ -27,21 +27,21 @@ float4 main_fragment(VertexOutput input): SV_Target0 {
     const uint geometry_index = cascade_data.texture_indices & 0xFF;
     const uint cascade_index = (cascade_data.texture_indices >> 8) & 0xFF;
     Texture2D<float4> geometry = gpu_texture<Texture2D<float4>>(geometry_index);
-    Texture3D<float4> cascade0 = gpu_texture<Texture3D<float4>>(cascade_index);
+    Texture3D<float3> cascade0 = gpu_texture<Texture3D<float3>>(cascade_index);
     SamplerState nearest = gpu_sampler(0);
 
     float3 cascade0_extents;
     cascade0.GetDimensions(cascade0_extents.x, cascade0_extents.y, cascade0_extents.z);
 
     int4 cascade0_coords = int4(int2(input.uv*cascade0_extents.xy), 0, 0);
-    float4 fluenence = 0.5*cascade0.Load(cascade0_coords) + 0.125*(
+    float3 fluenence = 0.5*cascade0.Load(cascade0_coords) + 0.125*(
         cascade0.Load(cascade0_coords + int4(-1,0,0,0)) +
         cascade0.Load(cascade0_coords + int4(1,0,0,0)) +
         cascade0.Load(cascade0_coords + int4(0,-1,0,0)) +
         cascade0.Load(cascade0_coords + int4(0,1,0,0)));
 
     float4 sample_value = geometry.Sample(nearest, input.uv);
-    return sample_value + (1.0-sample_value.a)*fluenence;
+    return float4(sample_value.rgb + (1.0-sample_value.a)*fluenence, sample_value.a);
 }
 
 GPU_ROOT(CascadeData, cascade_data);
@@ -135,7 +135,7 @@ void approximate_trace(uint3 trace_coords: SV_DispatchThreadID) {
 void compute_cone_fluence(uint3 cone_coords: SV_DispatchThreadID) {
     const uint cones_index = (cascade_data.texture_indices) & 0xFF;
     const uint traces_index = (cascade_data.texture_indices >> 8) & 0xFF;
-    RWTexture3D<float4> cones = gpu_texture<RWTexture3D<float4>>(cones_index);
+    RWTexture3D<float3> cones = gpu_texture<RWTexture3D<float3>>(cones_index);
     RWTexture3D<float4> traces = gpu_texture<RWTexture3D<float4>>(traces_index);
 
     int2 cones_extents;
@@ -169,9 +169,9 @@ void accumulate_cone_fluence(uint3 cone_coords: SV_DispatchThreadID) {
     const uint cones_index = (cascade_data.texture_indices) & 0xFF;
     const uint traces_index = (cascade_data.texture_indices >> 8) & 0xFF;
     const uint direction = (cascade_data.texture_indices >> 24) & 0xFF;
-    RWTexture3D<float4> cones = gpu_texture<RWTexture3D<float4>>(cones_index);
+    RWTexture3D<float3> cones = gpu_texture<RWTexture3D<float3>>(cones_index);
     RWTexture3D<float4> traces = gpu_texture<RWTexture3D<float4>>(traces_index);
-    RWTexture3D<float4> next_cones = gpu_texture<RWTexture3D<float4>>(cones_index+1);
+    RWTexture3D<float3> next_cones = gpu_texture<RWTexture3D<float3>>(cones_index+1);
 
     int2 cones_extents;
     int cones_count;
