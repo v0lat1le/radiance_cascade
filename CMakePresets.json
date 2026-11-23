@@ -22,7 +22,7 @@
       "name": "debug_msvc",
       "inherits": "debug_base",
       "cacheVariables": {
-        "CMAKE_CXX_FLAGS": "/W4"
+        "CMAKE_CXX_FLAGS": "/W4 /EHsc"
       },
       "generator": "Ninja",
       "condition": {
