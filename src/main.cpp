@@ -137,7 +137,7 @@ int main() {
     struct Cascade {
         gpu::uint32 width;
         gpu::uint32 height;
-        gpu::uint32 cascade_cones;
+        gpu::uint16 cascade_cones;
         gpu::Texture* traces_texture;
         gpu::Texture* cones_texture;
         gpu::uint8 traces_texture_slot;
@@ -145,11 +145,10 @@ int main() {
     };
     std::vector<Cascade> cascades(N_CASCADES);
 
-    uint32 cascade_width = texture_desc.extent.x;
-    uint32 cascade_height = texture_desc.extent.y;
-    uint32 cascade_cones = 1;
+    gpu::uint32 cascade_width = texture_desc.extent.x;
+    gpu::uint32 cascade_height = texture_desc.extent.y;
+    gpu::uint16 cascade_cones = 1;
 
-    texture_desc.type = gpu::TextureType::three_d;
     texture_desc.usage = gpu::TextureUsage::storage | gpu::TextureUsage::sampled;
     for (uint32 i=0; i<cascades.size(); ++i) {
         cascades[i].height = cascade_height;
@@ -157,13 +156,14 @@ int main() {
         cascades[i].cascade_cones = cascade_cones;
 
         texture_desc.format = gpu::Format::rgba16_float;
-        texture_desc.extent = {.x = cascade_width, .y = cascade_height, .z = cascade_cones+1};
+        texture_desc.extent = {.x = cascade_width*(cascade_cones+1), .y = cascade_height, .z = 1};
         texture_requirements = gpu::get_texture_size_align(device, texture_desc);
         texture_heap_offset = align_up(texture_heap_offset, texture_requirements.align);
         cascades[i].traces_texture = gpu::create_texture(device, texture_desc, texture_heap, texture_heap_offset);
         texture_heap_offset += texture_requirements.size;
+
         texture_desc.format = gpu::Format::rg11b10_float;
-        texture_desc.extent = {.x = cascade_width, .y = cascade_height, .z = cascade_cones};
+        texture_desc.extent = {.x = cascade_width*cascade_cones, .y = cascade_height, .z = 1};
         texture_requirements = gpu::get_texture_size_align(device, texture_desc);
         texture_heap_offset = align_up(texture_heap_offset, texture_requirements.align);
         cascades[i].cones_texture = gpu::create_texture(device, texture_desc, texture_heap, texture_heap_offset);
@@ -349,17 +349,19 @@ int main() {
             for (int i=0; i<n_traced && i<cascades.size(); ++i) {
                 gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
                 cascade_data.cpu->texture_indices = cascades[i].traces_texture_slot << 8 | (direction << 24);
+                cascade_data.cpu->cones_count = cascades[i].cascade_cones;
                 bind_pso(commands, compute_trace_pso);
-                dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width+15)/16, .y = (cascades[i].height+15)/16, .z = cascades[i].cascade_cones+1});
-                barrier(commands,
-                    gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
-                    gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
+                dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width*(cascades[i].cascade_cones+1)+15)/16, .y = (cascades[i].height+15)/16, .z = 1});
             }
+            barrier(commands,
+                gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
+                gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
             for (int i=n_traced; i<cascades.size(); ++i) {
                 gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
                 cascade_data.cpu->texture_indices = cascades[i].traces_texture_slot;
+                cascade_data.cpu->cones_count = cascades[i].cascade_cones;
                 bind_pso(commands, approximate_traces_pso);
-                dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width+15)/16, .y = (cascades[i].height+15)/16, .z = cascades[i].cascade_cones+1});
+                dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width*(cascades[i].cascade_cones+1)+15)/16, .y = (cascades[i].height+15)/16, .z = 1});
                 barrier(commands,
                     gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
                     gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
@@ -367,8 +369,9 @@ int main() {
             {
                 gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
                 cascade_data.cpu->texture_indices = cascades.back().cones_texture_slot | (cascades.back().traces_texture_slot << 8);
+                cascade_data.cpu->cones_count = cascades.back().cascade_cones;
                 bind_pso(commands, compute_cone_fluence_pso);
-                dispatch(commands, cascade_data.gpu, {.x = (cascades.back().width+15)/16, .y = (cascades.back().height+15)/16, .z = cascades.back().cascade_cones});
+                dispatch(commands, cascade_data.gpu, {.x = (cascades.back().width*cascades.back().cascade_cones+15)/16, .y = (cascades.back().height+15)/16, .z = 1});
                 barrier(commands,
                     gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
                     gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);
@@ -376,11 +379,12 @@ int main() {
             for (auto i=cascades.size()-1; i-->0;) {
                 gpu::GpuCpuRange<CascadeData> cascade_data = allocate<CascadeData>(frame_heap, 1, 16);
                 cascade_data.cpu->texture_indices = cascades[i].cones_texture_slot | (cascades[i].traces_texture_slot << 8);
+                cascade_data.cpu->cones_count = cascades[i].cascade_cones;
                 if (i==0) {
                     cascade_data.cpu->texture_indices |= ((direction+1) << 24);
                 }
                 bind_pso(commands, accumulate_cone_fluence_pso);
-                dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width+15)/16, .y = (cascades[i].height+15)/16, .z = cascades[i].cascade_cones});
+                dispatch(commands, cascade_data.gpu, {.x = (cascades[i].width*cascades[i].cascade_cones+15)/16, .y = (cascades[i].height+15)/16, .z = 1});
                 barrier(commands,
                     gpu::Stage::compute, gpu::Access::shader_write | gpu::Access::shader_read,
                     gpu::Stage::compute,  gpu::Access::shader_read | gpu::Access::shader_write);

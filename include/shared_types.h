@@ -6,5 +6,7 @@
 
 struct CascadeData {
     uint32_t texture_indices;
-    uint32_t padding[3];
+    uint16_t cones_count;
+    uint16_t padding1;
+    uint32_t padding2[2];
 };
