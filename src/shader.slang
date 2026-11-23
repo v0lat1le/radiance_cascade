@@ -30,10 +30,10 @@ float4 main_fragment(VertexOutput input): SV_Target0 {
     Texture3D<float4> cascade0 = gpu_texture<Texture3D<float4>>(cascade_index);
     SamplerState nearest = gpu_sampler(0);
 
-    int width, height, depth;
-    cascade0.GetDimensions(width, height, depth);
+    float3 cascade0_extents;
+    cascade0.GetDimensions(cascade0_extents.x, cascade0_extents.y, cascade0_extents.z);
 
-    int4 cascade0_coords = int4(int2(input.uv*float2(width, height)), 0, 0);
+    int4 cascade0_coords = int4(int2(input.uv*cascade0_extents.xy), 0, 0);
     float4 fluenence = 0.5*cascade0.Load(cascade0_coords) + 0.125*(
         cascade0.Load(cascade0_coords + int4(-1,0,0,0)) +
         cascade0.Load(cascade0_coords + int4(1,0,0,0)) +
@@ -55,20 +55,37 @@ void compute_trace(int3 trace_coords: SV_DispatchThreadID) {
     Texture2D<float4> geometry = gpu_texture<Texture2D<float4>>(geometry_index);
     RWTexture3D<float4> traces = gpu_texture<RWTexture3D<float4>>(traces_index);
 
-    int traces_width, traces_height, traces_count;
-    traces.GetDimensions(traces_width, traces_height, traces_count);
-    if (trace_coords.x >= traces_width | trace_coords.y >= traces_height) {
+    int2 traces_extents;
+    int traces_count;
+    traces.GetDimensions(traces_extents.x, traces_extents.y, traces_count);
+    if (trace_coords.x >= traces_extents.x | trace_coords.y >= traces_extents.y) {
         return;
     }
-    int geometry_width, geometry_height;
-    geometry.GetDimensions(geometry_width, geometry_height);
+    int2 geometry_extents;
+    geometry.GetDimensions(geometry_extents.x, geometry_extents.y);
 
     const int cones_count = traces_count-1;
-    int2 geometry_coords = int2(trace_coords.x*cones_count, trace_coords.y);
-    float2 sample_step = float2(1.0, (2*trace_coords.z-cones_count)/float(cones_count));  // TODO: try DDA
-    for (int dir = 0; dir < direction; ++dir) {
-        geometry_coords = int2(geometry_width-1-geometry_coords.y, geometry_coords.x);
-        sample_step = float2(-sample_step.y, sample_step.x);
+    const int geometry_coords_x = trace_coords.x*cones_count;
+    const float sample_step_y = (2*trace_coords.z-cones_count)/float(cones_count);  // TODO: try DDA
+    int2 geometry_coords;
+    float2 sample_step;
+    switch (direction) {
+        case 0:
+            geometry_coords = int2(geometry_coords_x, trace_coords.y);
+            sample_step = float2(1.0, sample_step_y);
+        break;
+        case 1:
+            geometry_coords = int2(geometry_extents.x-1-trace_coords.y, geometry_coords_x);
+            sample_step = float2(-sample_step_y, 1.0);
+        break;
+        case 2:
+            geometry_coords = geometry_extents-1 - int2(geometry_coords_x, trace_coords.y);
+            sample_step = float2(-1.0, -sample_step_y);
+        break;
+        case 3:
+            geometry_coords = int2(trace_coords.y, geometry_extents.y-1-geometry_coords_x);
+            sample_step = float2(sample_step_y, -1.0);
+        break;
     }
     for (int step = 0; step <= cones_count; ++step) {
         float4 sample_value = geometry[geometry_coords + int2(rint(sample_step*step))];
@@ -91,9 +108,10 @@ void approximate_trace(uint3 trace_coords: SV_DispatchThreadID) {
     RWTexture3D<float4> traces = gpu_texture<RWTexture3D<float4>>(traces_index);
     RWTexture3D<float4> prev_traces = gpu_texture<RWTexture3D<float4>>(traces_index-1);
 
-    int traces_width, traces_height, traces_count;
-    traces.GetDimensions(traces_width, traces_height, traces_count);
-    if (trace_coords.x >= traces_width | trace_coords.y >= traces_height) {
+    int2 traces_extents;
+    int traces_count;
+    traces.GetDimensions(traces_extents.x, traces_extents.y, traces_count);
+    if (trace_coords.x >= traces_extents.x | trace_coords.y >= traces_extents.y) {
         return;
     }
 
@@ -120,9 +138,10 @@ void compute_cone_fluence(uint3 cone_coords: SV_DispatchThreadID) {
     RWTexture3D<float4> cones = gpu_texture<RWTexture3D<float4>>(cones_index);
     RWTexture3D<float4> traces = gpu_texture<RWTexture3D<float4>>(traces_index);
 
-    int cones_width, cones_height, cones_count;
-    cones.GetDimensions(cones_width, cones_height, cones_count);
-    if (cone_coords.x >= cones_width | cone_coords.y >= cones_height) {
+    int2 cones_extents;
+    int cones_count;
+    cones.GetDimensions(cones_extents.x, cones_extents.y, cones_count);
+    if (cone_coords.x >= cones_extents.x | cone_coords.y >= cones_extents.y) {
         return;
     }
 
@@ -154,9 +173,10 @@ void accumulate_cone_fluence(uint3 cone_coords: SV_DispatchThreadID) {
     RWTexture3D<float4> traces = gpu_texture<RWTexture3D<float4>>(traces_index);
     RWTexture3D<float4> next_cones = gpu_texture<RWTexture3D<float4>>(cones_index+1);
 
-    int cones_width, cones_height, cones_count;
-    cones.GetDimensions(cones_width, cones_height, cones_count);
-    if (cone_coords.x >= cones_width | cone_coords.y >= cones_height) {
+    int2 cones_extents;
+    int cones_count;
+    cones.GetDimensions(cones_extents.x, cones_extents.y, cones_count);
+    if (cone_coords.x >= cones_extents.x | cone_coords.y >= cones_extents.y) {
         return;
     }
 
@@ -194,13 +214,27 @@ void accumulate_cone_fluence(uint3 cone_coords: SV_DispatchThreadID) {
         cones[cone_coords].rgb = cone_fluence;
         return;
     }
+    if (cone_coords.x == 0) {
+        return;
+    }
+    if (direction == 1 && cone_coords.x == cones_extents.x-1) {
+        cones[cone_coords].rgb = float3(0.0);
+    }
     cone_coords.x -= 1;
     if (direction == 1) {
         cones[cone_coords].rgb = cone_fluence;
         return;
     }
-    for (int dir = 1; dir < direction; ++dir) {
-        cone_coords = int3(cones_height-cone_coords.y-1, cone_coords.x, cone_coords.z);
+    switch (direction) {
+        case 2:
+            cone_coords = int3(cones_extents.x-cone_coords.y-1, cone_coords.x, cone_coords.z);
+        break;
+        case 3:
+            cone_coords = int3(cones_extents.x-1-cone_coords.x, cones_extents.y-1-cone_coords.y, cone_coords.z);
+        break;
+        case 4:
+            cone_coords = int3(cone_coords.y, cones_extents.y-1-cone_coords.x, cone_coords.z);
+        break;
     }
     cones[cone_coords].rgb += cone_fluence;
 }
