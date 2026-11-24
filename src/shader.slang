@@ -63,32 +63,30 @@ void compute_trace(uint3 trace_coords: SV_DispatchThreadID) {
 
     const uint trace_idx = trace_coords.x/traces_extents.x;
     const uint trace_x = trace_coords.x%traces_extents.x;
-    const uint geometry_coords_x = trace_x*cones_count;  // TODO: this assumes 1:1 R0 probe placement
+    const float probe_spacing = float(geometry_extents.y)/float(traces_extents.y);
     const float sample_step_y = (2.0*trace_idx-cones_count)/float(cones_count);  // TODO: try DDA
-    uint2 geometry_coords;
-    float2 sample_step;
+    uint2 geometry_coords = uint2(float2(trace_x*cones_count, trace_coords.y+0.5)*probe_spacing);
+    float2 sample_step = float2(1.0, sample_step_y);
     switch (direction) {
-        case 0:
-            geometry_coords = uint2(geometry_coords_x, trace_coords.y);
-            sample_step = float2(1.0, sample_step_y);
-        break;
         case 1:
-            geometry_coords = uint2(geometry_extents.x-1-trace_coords.y, geometry_coords_x);
-            sample_step = float2(-sample_step_y, 1.0);
+            geometry_coords = uint2(geometry_extents.y-1-geometry_coords.y, geometry_coords.x);
+            sample_step = float2(-sample_step.y, sample_step.x);
         break;
         case 2:
-            geometry_coords = geometry_extents-1 - uint2(geometry_coords_x, trace_coords.y);
-            sample_step = float2(-1.0, -sample_step_y);
+            geometry_coords = geometry_extents-1-geometry_coords;
+            sample_step = -sample_step;
         break;
         case 3:
-            geometry_coords = uint2(trace_coords.y, geometry_extents.y-1-geometry_coords_x);
-            sample_step = float2(sample_step_y, -1.0);
+            geometry_coords = uint2(geometry_coords.y, geometry_extents.x-1-geometry_coords.x);
+            sample_step = float2(sample_step.y, -sample_step.x);
         break;
     }
-    for (int step = 0; step <= cones_count; ++step) {
+    const float step_count = cones_count*probe_spacing;
+    for (float step = 0; step <= step_count; step+=1.0) {
+        // TODO: break if out of bounds
         float4 sample_value = geometry[geometry_coords + int2(rint(sample_step*step))];
         if (sample_value.a > 0.1) {
-            traces[trace_coords.xy] = sample_value;  // TODO: out of bounds
+            traces[trace_coords.xy] = sample_value;
             return;  // TODO: integrate emission and transmission for translucent objects
         }
     }
