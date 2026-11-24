@@ -1,8 +1,6 @@
 # HRC TODO
 
 ### To Do
-- [ ] non power-2 sizes
-- [ ] non-square grids
 - [ ] sparser probes (ray tracing assumes probe per pixel)
 - [ ] imgui debugging views (view textures, stages, etc)
 - [ ] optimization - fast atan

@@ -240,13 +240,13 @@ void accumulate_cone_fluence(uint3 cone_coords: SV_DispatchThreadID) {
             cones[uint2(cone_x-1, cone_coords.y)] = cone_fluence;
             return;
         case 2:
-            cones[uint2(cones_extents.x-cone_coords.y-1, cone_x-1)] += cone_fluence;
+            cones[uint2(cones_extents.y-cone_coords.y-1, cone_x-1)] += cone_fluence;
             return;
         case 3:
             cones[uint2(cones_extents.x-cone_x, cones_extents.y-1-cone_coords.y)] += cone_fluence;
             return;
         case 4:
-            cones[uint2(cone_coords.y, cones_extents.y-cone_coords.x)] += cone_fluence;
+            cones[uint2(cone_coords.y, cones_extents.x-cone_coords.x)] += cone_fluence;
             return;
     }
 }
