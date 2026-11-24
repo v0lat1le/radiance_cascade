@@ -30,7 +30,7 @@ float4 main_fragment(VertexOutput input): SV_Target0 {
     Texture2D<float3> cascade0 = gpu_texture<Texture2D<float3>>(cascade_index);
     SamplerState nearest = gpu_sampler(0);
 
-    const float2 cascade0_extents = (cascade_data.width1, cascade_data.height1);
+    const float2 cascade0_extents = float2(cascade_data.width1, cascade_data.height1);
     const uint3 cascade0_coords = uint3(uint2(input.uv*cascade0_extents), 0);
     const float3 fluenence = 0.5*cascade0.Load(cascade0_coords) + 0.125*(
         cascade0.Load(cascade0_coords + int3(-1,0,0)) +
@@ -99,6 +99,13 @@ float4 merge_traces(float4 near, float4 far) {
     return near + (1.0 - near.a)*far;
 }
 
+T load_strip<T : ITexelElement>(Texture2D<T> texture, uint2 coords, uint strip, uint2 strip_extents) {
+    if (coords.x >= strip_extents.x | coords.y >= strip_extents.y) {
+        return T(T.Element(0));
+    }
+    return texture[uint2(coords.x + strip*strip_extents.x, coords.y)];
+}
+
 [shader("compute")]
 [numthreads(16, 16, 1)]
 void approximate_trace(uint3 trace_coords: SV_DispatchThreadID) {
@@ -117,18 +124,22 @@ void approximate_trace(uint3 trace_coords: SV_DispatchThreadID) {
 
     const uint trace_idx = trace_coords.x/traces_extents.x;
     const uint trace_x = trace_coords.x%traces_extents.x;
+    const uint prev_trace_x = trace_x*2 + (trace_idx/2)*prev_traces_extents.x;
+    const uint prev_trace_y = trace_coords.y + trace_idx - traces_count/2;
+    const float4 prev_trace0 = prev_traces[uint2(prev_trace_x, trace_coords.y)];
     if ((trace_idx & 1) == 1) {
-        traces[trace_coords.xy] = 0.5 * (
+        const float4 prev_trace1 = prev_traces[uint2(prev_trace_x+prev_traces_extents.x, trace_coords.y)];
+        traces[trace_coords.xy] = 0.5*(
             merge_traces(
-                prev_traces[uint2(trace_x*2+(trace_idx-1)*traces_extents.x, trace_coords.y)],
-                prev_traces[uint2(trace_x*2+1+(trace_idx+1)*traces_extents.x, trace_coords.y+trace_idx-1-traces_count/2)]) +
+                prev_trace0,
+                prev_traces[uint2(prev_trace_x+1+prev_traces_extents.x, prev_trace_y-1)]) + // TODO: x/y out of bounds
             merge_traces(
-                prev_traces[uint2(trace_x*2+(trace_idx+1)*traces_extents.x, trace_coords.y)],
-                prev_traces[uint2(trace_x*2+1+(trace_idx-1)*traces_extents.x, trace_coords.y+trace_idx+1-traces_count/2)]));
+                prev_trace1,
+                prev_traces[uint2(prev_trace_x+1, prev_trace_y+1)]));  // TODO: x/y out of bounds
     } else {
         traces[trace_coords.xy] = merge_traces(
-            prev_traces[uint2(trace_x*2+trace_idx*traces_extents.x, trace_coords.y)],
-            prev_traces[uint2(trace_x*2+1+trace_idx*traces_extents.x, trace_coords.y+trace_idx-traces_count/2)]);
+            prev_trace0,
+            prev_traces[uint2(prev_trace_x+1, prev_trace_y)]);  // TODO: x/y out of bounds
     }
 }
 
@@ -148,14 +159,15 @@ void compute_cone_fluence(uint3 cone_coords: SV_DispatchThreadID) {
 
     const uint cone_idx = cone_coords.x/cones_extents.x;
     const uint cone_x = cone_coords.x%cones_extents.x;
-    const uint next_cone_idx = cone_idx*2;
-    const float3 trace_angles = atan2(
-        float3(float(next_cone_idx)-cones_count, float(next_cone_idx)+1-cones_count, float(next_cone_idx)+2-cones_count),
-        float3(cones_count));
+    const uint trace_x = cone_x + cone_idx*cones_extents.x;
+    const float3 trace0 = traces[uint2(trace_x, cone_coords.y)].rgb;
+    const float3 trace1 = traces[uint2(trace_x+cones_extents.x, cone_coords.y)].rgb;
+
+    const float cone_dy = 2.0*cone_idx - cones_count;
+    const float3 trace_angles = atan2(float3(cone_dy, cone_dy+1.0, cone_dy+2.0), float3(cones_count));
     const float2 cone_angles = (trace_angles.yz-trace_angles.xy)*0.5/3.14159265;
-    cones[cone_coords.xy] =
-        cone_angles.x*traces[uint2(cone_x+cone_idx*cones_extents.x, cone_coords.y)].rgb +
-        cone_angles.y*traces[uint2(cone_x+(cone_idx+1)*cones_extents.x, cone_coords.y)].rgb;
+
+    cones[cone_coords.xy] = cone_angles.x*trace0.rgb + cone_angles.y*trace1.rgb;
 }
 
 float3 merge_trace_cone(float4 near, float3 far) {
@@ -184,55 +196,52 @@ void accumulate_cone_fluence(uint3 cone_coords: SV_DispatchThreadID) {
         return;
     }
 
+    const float4 trace0 = traces[uint2(cone_coords.x, cone_coords.y)];
+    const float4 trace1 = traces[uint2(cone_coords.x+cones_extents.x, cone_coords.y)];
+
     const uint cone_idx = cone_coords.x/cones_extents.x;
     const uint cone_x = cone_coords.x%cones_extents.x;
     const uint next_cone_idx = cone_idx*2;
-    const float3 trace_angles = atan2(
-        float3(float(next_cone_idx)-cones_count, float(next_cone_idx)+1-cones_count, float(next_cone_idx)+2-cones_count),
-        float3(cones_count));
-    const float2 cone_angles = (trace_angles.yz-trace_angles.xy)*0.5/3.14159265;
-    float3 cone_fluence;
 
+    const float cone_dy = float(next_cone_idx) - cones_count;
+    const float3 trace_angles = atan2(float3(cone_dy, cone_dy+1.0, cone_dy+2.0), float3(cones_count));
+    const float2 cone_angles = (trace_angles.yz-trace_angles.xy)*0.5/3.14159265;
+
+    const uint next_cone_x = cone_x/2 + next_cone_idx*next_cones_extents.x;
+
+    float3 cone_fluence;
     if ((cone_x & 1) == 1) {
-        if (cone_x/2+1 == cones_extents.x/2) {
-            cone_fluence = 
-                cone_angles.x*traces[uint2(cone_x+cone_idx*cones_extents.x, cone_coords.y)].rgb +
-                cone_angles.y*traces[uint2(cone_x+(cone_idx+1)*cones_extents.x, cone_coords.y)].rgb;
+        if (cone_x/2+1 >= next_cones_extents.x) {
+            cone_fluence = cone_angles.x*trace0.rgb + cone_angles.y*trace1.rgb;
         } else {
             cone_fluence =
                 merge_trace_cone(
-                    scale_trace(cone_angles.x, traces[uint2(cone_x+cone_idx*cones_extents.x, cone_coords.y)]),
-                    next_cones[uint2(cone_x/2+1+next_cone_idx*cones_extents.x/2, cone_coords.y+next_cone_idx-cones_count)].rgb) +
+                    scale_trace(cone_angles.x, trace0),
+                    next_cones[uint2(next_cone_x+1, cone_coords.y+next_cone_idx-cones_count)].rgb) +
                 merge_trace_cone(
-                    scale_trace(cone_angles.y, traces[uint2(cone_x+(cone_idx+1)*cones_extents.x, cone_coords.y)]),
-                    next_cones[uint2(cone_x/2+1+(next_cone_idx+1)*cones_extents.x/2, cone_coords.y+next_cone_idx+2-cones_count)].rgb);
+                    scale_trace(cone_angles.y, trace1),
+                    next_cones[uint2(next_cone_x+1+next_cones_extents.x, cone_coords.y+next_cone_idx+2-cones_count)].rgb);
         }
     } else {
-        if (cone_x/2+1 == cones_extents.x/2) {
+        const float4 next_trace0 = traces[uint2(cone_coords.x+1, cone_coords.y+next_cone_idx-cones_count)];
+        const float4 next_trace1 = traces[uint2(cone_coords.x+1+cones_extents.x, cone_coords.y+next_cone_idx+2-cones_count)];
+        if (cone_x/2+1 >= next_cones_extents.x) {
             cone_fluence = 0.5*(
-                next_cones[uint2(cone_x/2+next_cone_idx*cones_extents.x/2, cone_coords.y)].rgb +
-                cone_angles.x*merge_traces(
-                        traces[uint2(cone_x+cone_idx*cones_extents.x, cone_coords.y)],
-                        traces[uint2(cone_x+1+cone_idx*cones_extents.x, cone_coords.y+next_cone_idx-cones_count)]).rgb +
-                next_cones[uint2(cone_x/2+(next_cone_idx+1)*cones_extents.x/2, cone_coords.y)].rgb +
-                cone_angles.y*merge_traces(
-                        traces[uint2(cone_x+(cone_idx+1)*cones_extents.x, cone_coords.y)],
-                        traces[uint2(cone_x+1+(cone_idx+1)*cones_extents.x, cone_coords.y+next_cone_idx+2-cones_count)]).rgb);
+                next_cones[uint2(next_cone_x, cone_coords.y)].rgb +
+                cone_angles.x*merge_traces(trace0, next_trace0).rgb +
+                next_cones[uint2(next_cone_x+next_cones_extents.x, cone_coords.y)].rgb +
+                cone_angles.y*merge_traces(trace1, next_trace1).rgb);
         } else {
             cone_fluence = 0.5*(
-                next_cones[uint2(cone_x/2+next_cone_idx*cones_extents.x/2, cone_coords.y)].rgb +
+                next_cones[uint2(next_cone_x, cone_coords.y)].rgb +
                 merge_trace_cone(
-                    scale_trace(cone_angles.x, merge_traces(
-                        traces[uint2(cone_x+cone_idx*cones_extents.x, cone_coords.y)],
-                        traces[uint2(cone_x+1+cone_idx*cones_extents.x, cone_coords.y+next_cone_idx-cones_count)])),
-                    next_cones[uint2(cone_x/2+1+next_cone_idx*cones_extents.x/2, cone_coords.y+2*(next_cone_idx-cones_count))].rgb) +
+                    scale_trace(cone_angles.x, merge_traces(trace0, next_trace0)),
+                    next_cones[uint2(next_cone_x+1, cone_coords.y+2*(next_cone_idx-cones_count))].rgb) +
 
-                next_cones[uint2(cone_x/2+(next_cone_idx+1)*cones_extents.x/2, cone_coords.y)].rgb +
+                next_cones[uint2(next_cone_x+next_cones_extents.x, cone_coords.y)].rgb +
                 merge_trace_cone(
-                    scale_trace(cone_angles.y, merge_traces(
-                        traces[uint2(cone_x+(cone_idx+1)*cones_extents.x, cone_coords.y)],
-                        traces[uint2(cone_x+1+(cone_idx+1)*cones_extents.x, cone_coords.y+next_cone_idx+2-cones_count)])),
-                    next_cones[uint2(cone_x/2+1+(next_cone_idx+1)*cones_extents.x/2, cone_coords.y+2*(next_cone_idx+2-cones_count))].rgb));
+                    scale_trace(cone_angles.y, merge_traces(trace1, next_trace1)),
+                    next_cones[uint2(next_cone_x+1+next_cones_extents.x, cone_coords.y+2*(next_cone_idx+2-cones_count))].rgb));
         }
     }
     if (direction == 0) {  // TODO: should be a separate shader?
