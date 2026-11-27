@@ -50,20 +50,20 @@ target_include_directories(imgui_impl_nographicsapi PUBLIC ${PROJECT_SOURCE_DIR}
 target_link_libraries(imgui_impl_nographicsapi PRIVATE imgui NoGraphicsAPI)
 
 
-add_executable(radiance_cascade src/main.cpp)
-target_include_directories(radiance_cascade PRIVATE "include")
+add_executable(radiance_cascade src/main.cpp src/cascades.cpp)
+target_include_directories(radiance_cascade PRIVATE include)
 target_link_libraries(radiance_cascade PRIVATE RGFW NoGraphicsAPI::NoGraphicsAPI imgui imgui_impl_rgfw imgui_impl_nographicsapi)
 if(APPLE)
     target_link_libraries(radiance_cascade PRIVATE "-framework Cocoa")
 endif()
 
 
-find_program(SLANGC_EXECUTABLE NAMES slangc HINTS "$ENV{VULKAN_SDK}/bin" REQUIRED)
+find_program(SLANGC_EXECUTABLE NAMES slangc HINTS $ENV{VULKAN_SDK}/bin REQUIRED)
 if(APPLE)
-    set(SHADER_EXTENSION ".metallib")
+    set(SHADER_EXTENSION .metallib)
     set(SLANG_TARGET_OPTIONS -target metallib -DNOGRAPHICSAPI_METAL -Xmetal... -std=metal4.0 -target air64-apple-macos${CMAKE_OSX_DEPLOYMENT_TARGET} -X.)
 else()
-    set(SHADER_EXTENSION ".spv")
+    set(SHADER_EXTENSION .spv)
     set(SLANG_TARGET_OPTIONS -target spirv -profile spirv_1_5 -emit-spirv-directly -fvk-use-entrypoint-name -capability spvDescriptorHeapEXT)
 endif()
 
@@ -78,7 +78,7 @@ function (target_add_slang_shader TARGET SHADER_SOURCE)
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/shaders
         COMMAND ${SLANGC_EXECUTABLE} ${SLANG_TARGET_OPTIONS} ${SLANG_COMMON_OPTIONS} ${SLANG_INCLUDE_OPTIONS} -o ${SHADER_OUTPUT} -depfile ${SHADER_OUTPUT}.d ${CMAKE_CURRENT_SOURCE_DIR}/${SHADER_SOURCE}
         DEPENDS ${SHADER_SOURCE}
-        DEPFILE "${SHADER_OUTPUT}.d"
+        DEPFILE ${SHADER_OUTPUT}.d
         COMMENT "Compiling Slang Shaders"
         VERBATIM
         COMMAND_EXPAND_LISTS)
